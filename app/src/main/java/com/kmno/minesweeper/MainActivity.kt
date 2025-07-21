@@ -8,6 +8,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -25,7 +26,9 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -34,6 +37,12 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.kmno.minesweeper.ui.theme.MinesweeperTheme
+
+sealed class GameState {
+    object Playing : GameState()
+    object Won : GameState()
+    object Lost : GameState()
+}
 
 // --- Data Classes for Game State ---
 data class Cell(
@@ -69,7 +78,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-fun generateMinesweeperBoard(numRows: Int, numCols: Int, numMines: Int): List<Cell> {
+private fun generateMinesweeperBoard(numRows: Int, numCols: Int, numMines: Int): List<Cell> {
     val cells = mutableListOf<Cell>()
     for (row in 0 until numRows) {
         for (col in 0 until numCols) {
@@ -100,6 +109,28 @@ fun generateMinesweeperBoard(numRows: Int, numCols: Int, numMines: Int): List<Ce
     return cells
 }
 
+private fun uncoverNeighbors(currentCellInList: Cell,
+                             cells: MutableList<Cell>, numRows: Int, numCols: Int) {
+        for (r in currentCellInList.row - 1..currentCellInList.row + 1) {
+            for (c in currentCellInList.col - 1..currentCellInList.col + 1) {
+                if (r >= 0 && r < numRows && c >= 0 && c < numCols) {
+                    val adjacentCellIndex =
+                        cells.indexOfFirst { it.row == r && it.col == c }
+                    if (adjacentCellIndex != -1) {
+                        val adjacentCell = cells[adjacentCellIndex]
+                        if (adjacentCell.isCovered && !adjacentCell.isFlagged) {
+                            cells[adjacentCellIndex] =
+                                adjacentCell.copy(isCovered = false)
+                            if (adjacentCell.mineCountAround == 0) {
+                                uncoverNeighbors(cells[adjacentCellIndex], cells, numRows, numCols)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
 @Composable
 fun MinesweeperGameScreen() {
     // This composable will hold our game state and logic
@@ -115,6 +146,8 @@ fun MinesweeperGameScreen() {
         mutableStateListOf<Cell>().apply { addAll(generatedBoard) }
     }
 
+    val status = remember { mutableStateOf<GameState>(GameState.Playing) }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -122,17 +155,30 @@ fun MinesweeperGameScreen() {
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
-        // TODO: Placeholder for game status (e.g., "Mines: 10", "Game Over", "You Win!")
         Text(
             text = "Minesweeper",
             fontSize = 24.sp,
             fontWeight = MaterialTheme.typography.titleLarge.fontWeight
+        )
+        Text(
+            text = "Status: ${
+                when (status.value) {
+                    GameState.Playing -> "Playing..."
+                    GameState.Lost -> "You Lose!"
+                    GameState.Won -> "You Win!"
+                }
+            }",
+            fontSize = 16.sp,
+            fontWeight = MaterialTheme.typography.titleSmall.fontWeight
         )
         Spacer(modifier = Modifier.height(16.dp))
 
         MinesweeperBoard(
             cells = cells,
             onCellClick = { clickedCell ->
+                if (status.value != GameState.Playing) {
+                    return@MinesweeperBoard // Use return@label to exit the lambda
+                }
                 println("Cell clicked: (${clickedCell.row}, ${clickedCell.col}")
                 val index =
                     cells.indexOfFirst { it.row == clickedCell.row && it.col == clickedCell.col }
@@ -142,18 +188,30 @@ fun MinesweeperGameScreen() {
                         cells[index] = currentCellInList.copy(isCovered = false)
                         if (currentCellInList.isMine) {
                             // Handle game over
+                            status.value = GameState.Lost
+                            cells.forEachIndexed { index, cell ->
+                                if (cell.isMine) {
+                                    cells[index] = cell.copy(isCovered = false)
+                                }
+                            }
+                        } else if(currentCellInList.mineCountAround == 0) {
+                            uncoverNeighbors(currentCellInList, cells, numRows, numCols)
                         }
                     }
                 }
             },
-            onCellLongClick = { longClickedCell ->
+            onCellDoubleClick = { longClickedCell ->
                 println("Cell long clicked: (${longClickedCell.row}, ${longClickedCell.col})")
+                if (status.value != GameState.Playing) {
+                    return@MinesweeperBoard // Use return@label to exit the lambda
+                }
                 val index =
                     cells.indexOfFirst { it.row == longClickedCell.row && it.col == longClickedCell.col }
                 if (index != -1) {
                     val currentCellInList = cells[index] // Get the up-to-date cell from the list
                     if (currentCellInList.isCovered) {
-                        cells[index] = currentCellInList.copy(isFlagged = !currentCellInList.isFlagged)
+                        cells[index] =
+                            currentCellInList.copy(isFlagged = !currentCellInList.isFlagged)
                     }
                 }
             }
@@ -166,7 +224,7 @@ fun MinesweeperGameScreen() {
 fun MinesweeperBoard(
     cells: List<Cell>,
     onCellClick: (Cell) -> Unit,
-    onCellLongClick: (Cell) -> Unit
+    onCellDoubleClick: (Cell) -> Unit
 ) {
     val numRows = 8 // Hardcoded for now, will derive from cells list later
     val numCols = 8 // Hardcoded for now, will derive from cells list later
@@ -185,7 +243,7 @@ fun MinesweeperBoard(
                     CellItem(
                         cell = cell,
                         onCellClick = onCellClick,
-                        onCellLongClick = onCellLongClick
+                        onCellDoubleClick = onCellDoubleClick
                     )
                 }
             }
@@ -198,7 +256,7 @@ fun MinesweeperBoard(
 fun RowScope.CellItem(
     cell: Cell,
     onCellClick: (Cell) -> Unit,
-    onCellLongClick: (Cell) -> Unit
+    onCellDoubleClick: (Cell) -> Unit
 ) {
     Box(
         modifier = Modifier
@@ -209,12 +267,13 @@ fun RowScope.CellItem(
                 when {
                     cell.isFlagged -> FlagColor
                     cell.isCovered -> CoveredCellColor
+                    cell.isMine -> MineColor
                     else -> UncoveredCellColor // Uncovered
                 }
             )
             .combinedClickable( // Handles both single click and long click
                 onClick = { onCellClick(cell) },
-                onLongClick = { onCellLongClick(cell) }
+                onDoubleClick = { onCellDoubleClick(cell) }
             ),
         contentAlignment = Alignment.Center
     ) {
